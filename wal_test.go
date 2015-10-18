@@ -319,12 +319,15 @@ func BenchmarkWALRead(b *testing.B) {
 	defer os.RemoveAll(tmpDir)
 	defer w.Delete()
 
+	sz := 200
+	num := 1000
+
 	var entries [][]byte
-	for i := 0; i < 250; i++ {
-		entries = append(entries, make([]byte, 1024))
+	for i := 0; i < num; i++ {
+		entries = append(entries, make([]byte, sz))
 	}
 
-	b.SetBytes(int64(1024 * 250 * runtime.GOMAXPROCS(0)))
+	b.SetBytes(int64(sz * len(entries) * runtime.GOMAXPROCS(0)))
 
 	for i := 0; i < b.N; i++ {
 		_, _, err := crcAppend(w, entries)
@@ -347,7 +350,7 @@ func BenchmarkWALRead(b *testing.B) {
 				b.Fatal(err.Error())
 			}
 			ch := c.ReadCh()
-			for i := 0; i < b.N*250; i++ {
+			for i := 0; i < b.N*len(entries); i++ {
 				<-ch
 			}
 			wg.Done()
