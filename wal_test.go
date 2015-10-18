@@ -50,12 +50,12 @@ func newTestLogger(tbl tbLog) logger {
 	return &testLogger{tbl}
 }
 
-func crcAppend(w WriteAheadLogger, events [][]byte) (uint64, uint64, error) {
-	crc := make([]uint32, 0, len(events))
-	for _, d := range events {
+func crcAppend(w WriteAheadLogger, entries [][]byte) (uint64, uint64, error) {
+	crc := make([]uint32, 0, len(entries))
+	for _, d := range entries {
 		crc = append(crc, crc32.ChecksumIEEE(d))
 	}
-	return w.Append(events, crc)
+	return w.Append(entries, crc)
 }
 
 func TestWAL(t *testing.T) {
@@ -75,13 +75,13 @@ func TestWAL(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 	defer w.Delete()
 
-	var events [][]byte
+	var entries [][]byte
 	for i := 0; i < bsize; i++ {
-		events = append(events, make([]byte, msize))
+		entries = append(entries, make([]byte, msize))
 	}
 
 	for i := 0; i < bnum; i++ {
-		_, _, err := crcAppend(w, events)
+		_, _, err := crcAppend(w, entries)
 		equal(t, err, nil)
 	}
 
@@ -102,7 +102,7 @@ func TestWAL(t *testing.T) {
 	for i := 0; i < bsize*bnum; i++ {
 		e := <-c.ReadCh()
 		t.Logf("id: %d", e.ID)
-		equal(t, e.Body, events[i%bsize])
+		equal(t, e.Body, entries[i%bsize])
 	}
 }
 
@@ -123,13 +123,13 @@ func TestWALCursor(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 	defer w.Delete()
 
-	var events [][]byte
+	var entries [][]byte
 	for i := 0; i < bsize; i++ {
-		events = append(events, make([]byte, msize))
+		entries = append(entries, make([]byte, msize))
 	}
 
 	for i := 0; i < bnum; i++ {
-		_, _, err := crcAppend(w, events)
+		_, _, err := crcAppend(w, entries)
 		equal(t, err, nil)
 	}
 
@@ -139,7 +139,7 @@ func TestWALCursor(t *testing.T) {
 	for i := 0; i < bsize*bnum-100; i++ {
 		e := <-c.ReadCh()
 		t.Logf("id: %d", e.ID)
-		equal(t, e.Body, events[i%bsize])
+		equal(t, e.Body, entries[i%bsize])
 	}
 }
 
@@ -159,13 +159,13 @@ func TestWALReopen(t *testing.T) {
 	nequal(t, w, nil)
 	defer os.RemoveAll(tmpDir)
 
-	var events [][]byte
+	var entries [][]byte
 	for i := 0; i < bsize; i++ {
-		events = append(events, make([]byte, msize))
+		entries = append(entries, make([]byte, msize))
 	}
 
 	for i := 0; i < bnum; i++ {
-		_, _, err := crcAppend(w, events)
+		_, _, err := crcAppend(w, entries)
 		equal(t, err, nil)
 	}
 
@@ -178,7 +178,7 @@ func TestWALReopen(t *testing.T) {
 	defer w.Delete()
 
 	for i := 0; i < bnum; i++ {
-		_, _, err := crcAppend(w, events)
+		_, _, err := crcAppend(w, entries)
 		equal(t, err, nil)
 	}
 }
@@ -195,9 +195,9 @@ func TestWALParallelReadWrite(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 	defer w.Delete()
 
-	var events [][]byte
+	var entries [][]byte
 	for i := 0; i < 25; i++ {
-		events = append(events, make([]byte, 4096))
+		entries = append(entries, make([]byte, 4096))
 	}
 
 	time.Sleep(100 * time.Millisecond)
@@ -211,7 +211,7 @@ func TestWALParallelReadWrite(t *testing.T) {
 		waitCh <- struct{}{}
 		<-startCh
 		for i := 0; i < 1000; i++ {
-			_, _, err := crcAppend(w, events)
+			_, _, err := crcAppend(w, entries)
 			if err != nil {
 				t.Fatal(err.Error())
 			}
@@ -272,12 +272,12 @@ func benchmarkWALAppend(b *testing.B, size int) {
 	defer os.RemoveAll(tmpDir)
 	defer w.Delete()
 
-	var events [][]byte
+	var entries [][]byte
 	for i := 0; i < 1024*1024/size; i++ {
-		events = append(events, make([]byte, size))
+		entries = append(entries, make([]byte, size))
 	}
 
-	b.SetBytes(int64(size * len(events) * runtime.GOMAXPROCS(0)))
+	b.SetBytes(int64(size * len(entries) * runtime.GOMAXPROCS(0)))
 
 	var wg sync.WaitGroup
 	waitCh := make(chan struct{})
@@ -289,7 +289,7 @@ func benchmarkWALAppend(b *testing.B, size int) {
 			waitCh <- struct{}{}
 			<-startCh
 			for i := 0; i < b.N; i++ {
-				_, _, err := crcAppend(w, events)
+				_, _, err := crcAppend(w, entries)
 				if err != nil {
 					b.Fatal(err.Error())
 				}
@@ -319,15 +319,15 @@ func BenchmarkWALRead(b *testing.B) {
 	defer os.RemoveAll(tmpDir)
 	defer w.Delete()
 
-	var events [][]byte
+	var entries [][]byte
 	for i := 0; i < 250; i++ {
-		events = append(events, make([]byte, 1024))
+		entries = append(entries, make([]byte, 1024))
 	}
 
 	b.SetBytes(int64(1024 * 250 * runtime.GOMAXPROCS(0)))
 
 	for i := 0; i < b.N; i++ {
-		_, _, err := crcAppend(w, events)
+		_, _, err := crcAppend(w, entries)
 		if err != nil {
 			b.Fatal(err.Error())
 		}

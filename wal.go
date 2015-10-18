@@ -1,3 +1,4 @@
+// Package wal implements a write-ahead log
 package wal
 
 import (
@@ -15,11 +16,22 @@ import (
 	"github.com/mreiferson/wal/internal/skiplist"
 )
 
+// WriteAheadLogger is the primary interface
 type WriteAheadLogger interface {
-	Append([][]byte, []uint32) (uint64, uint64, error)
+	// Append adds entries to the log, it expects a crc to be provided for each entry
+	Append(entries [][]byte, crc []uint32) (uint64, uint64, error)
+
+	// Close flushes and cleanly closes the log
 	Close() error
+
+	// Delete permanently closes the log by deleting all data
 	Delete() error
+
+	// Empty destructively clears out any pending data in the log
+	// by fast forwarding read positions and removing intermediate files
 	Empty() error
+
+	// GetCursor returns a Cursor at the specified index
 	GetCursor(idx uint64) (Cursor, error)
 }
 
@@ -55,6 +67,7 @@ type segmentListItem struct {
 	segmentNum uint64
 }
 
+// New returns a disk-backed WriteAheadLogger
 func New(name string, dataPath string, segmentMaxBytes int64, syncTimeout time.Duration, logger logger) (WriteAheadLogger, error) {
 	var err error
 
@@ -224,12 +237,12 @@ func (w *wal) openSegment(segmentNum uint64, idx uint64) (*segment, error) {
 		prefixedLogger(fmt.Sprintf("WAL(%s): ", w.name), w.logger))
 }
 
-// Append writes a [][]byte to the log
-func (w *wal) Append(data [][]byte, crc []uint32) (uint64, uint64, error) {
+// Append adds entries to the log, it expects a crc to be provided for each entry
+func (w *wal) Append(entries [][]byte, crc []uint32) (uint64, uint64, error) {
 	var err error
 
-	sizeWithHeader := int64(len(data)) * 16
-	for _, d := range data {
+	sizeWithHeader := int64(len(entries)) * 16
+	for _, d := range entries {
 		sizeWithHeader += int64(len(d))
 	}
 
@@ -237,8 +250,8 @@ func (w *wal) Append(data [][]byte, crc []uint32) (uint64, uint64, error) {
 		return 0, 0, fmt.Errorf("chunk too large %d > %d", sizeWithHeader, w.segmentMaxBytes)
 	}
 
-	if len(data) != len(crc) {
-		return 0, 0, fmt.Errorf("must provide crc for each event %d != %d", len(data), len(crc))
+	if len(entries) != len(crc) {
+		return 0, 0, fmt.Errorf("must provide crc for each entry %d != %d", len(entries), len(crc))
 	}
 
 	w.Lock()
@@ -269,7 +282,7 @@ func (w *wal) Append(data [][]byte, crc []uint32) (uint64, uint64, error) {
 		}
 	}
 
-	idx, err := segment.append(data, crc)
+	idx, err := segment.append(entries, crc)
 	if err != nil {
 		return 0, 0, err
 	}

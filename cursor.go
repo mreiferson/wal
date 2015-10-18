@@ -10,14 +10,19 @@ import (
 	"github.com/mreiferson/wal/internal/util"
 )
 
-type Event struct {
+// Entry contains the body and metadata for an entry in the log
+type Entry struct {
 	CRC  uint32
 	ID   uint64
 	Body []byte
 }
 
+// Cursor references a position in the log specified by a segment number and index
+// and exposes a channel to receive entries
+//
+// A Cursor should call Close when no longer in use
 type Cursor interface {
-	ReadCh() <-chan Event
+	ReadCh() <-chan Entry
 	Close() error
 }
 
@@ -33,7 +38,7 @@ type cursor struct {
 
 	f      *os.File
 	r      *bufio.Reader
-	readCh chan Event
+	readCh chan Entry
 
 	closeCh chan struct{}
 	wg      util.WaitGroupWrapper
@@ -48,7 +53,7 @@ func newCursor(w *wal, segmentNum uint64, idx uint64, offset uint64, logger logg
 		startIdx:   idx,
 		idx:        idx,
 		segmentNum: segmentNum,
-		readCh:     make(chan Event, 100), // TODO: (WAL) benchmark different buffer sizes
+		readCh:     make(chan Entry, 100), // TODO: (WAL) benchmark different buffer sizes
 		closeCh:    make(chan struct{}),
 		logger:     logger,
 	}
@@ -65,7 +70,7 @@ func (c *cursor) logf(f string, args ...interface{}) {
 	c.logger.Output(2, fmt.Sprintf(f, args...))
 }
 
-func (c *cursor) ReadCh() <-chan Event {
+func (c *cursor) ReadCh() <-chan Entry {
 	return c.readCh
 }
 
@@ -177,30 +182,30 @@ func (c *cursor) readHeader() error {
 	return err
 }
 
-func readOne(r io.Reader) (uint64, Event, bool, error) {
+func readOne(r io.Reader) (uint64, Entry, bool, error) {
 	var buf [4]byte
 
 	_, err := io.ReadFull(r, buf[:])
 	if err != nil {
-		return 0, Event{}, false, err
+		return 0, Entry{}, false, err
 	}
 	size := int32(binary.BigEndian.Uint32(buf[:]))
 
 	if size == eofIndicator {
-		return 0, Event{}, true, nil
+		return 0, Entry{}, true, nil
 	}
 
 	data := make([]byte, size)
 	_, err = io.ReadFull(r, data)
 	if err != nil {
-		return 0, Event{}, false, err
+		return 0, Entry{}, false, err
 	}
 
-	return 4 + uint64(size), sliceToEvent(data), false, nil
+	return 4 + uint64(size), sliceToEntry(data), false, nil
 }
 
-func sliceToEvent(data []byte) Event {
-	return Event{
+func sliceToEntry(data []byte) Entry {
+	return Entry{
 		CRC:  binary.BigEndian.Uint32(data[:4]),
 		ID:   binary.BigEndian.Uint64(data[4:12]),
 		Body: data[12:],

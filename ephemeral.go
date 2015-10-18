@@ -1,20 +1,21 @@
 package wal
 
 type ephemeralWAL struct {
-	ch  chan Event
+	ch  chan Entry
 	idx uint64
 }
 
+// NewEphemeral returns a memory-backed WriteAheadLogger
 func NewEphemeral() WriteAheadLogger {
 	return &ephemeralWAL{
-		ch: make(chan Event, 1000),
+		ch: make(chan Entry, 1000),
 	}
 }
 
-func (e *ephemeralWAL) Append(data [][]byte, crc []uint32) (uint64, uint64, error) {
+func (e *ephemeralWAL) Append(entries [][]byte, crc []uint32) (uint64, uint64, error) {
 	idxStart := e.idx
-	for _, entry := range data {
-		e.ch <- Event{
+	for _, entry := range entries {
+		e.ch <- Entry{
 			Body: entry,
 			ID:   e.idx,
 		}
@@ -43,10 +44,10 @@ func (e *ephemeralWAL) Empty() error {
 }
 
 type ephemeralCursor struct {
-	readCh chan Event
+	readCh chan Entry
 }
 
-func (c ephemeralCursor) ReadCh() <-chan Event {
+func (c ephemeralCursor) ReadCh() <-chan Entry {
 	return c.readCh
 }
 
