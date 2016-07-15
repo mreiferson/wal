@@ -51,6 +51,10 @@ func (c ephemeralCursor) ReadCh() <-chan Entry {
 	return c.readCh
 }
 
+func (c ephemeralCursor) Reset() (uint64, error) {
+	return 0, nil
+}
+
 func (c ephemeralCursor) Close() error {
 	return nil
 }

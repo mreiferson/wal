@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
+	"time"
 
 	"github.com/mreiferson/wal/internal/util"
 )
@@ -23,6 +25,7 @@ type Entry struct {
 // A Cursor should call Close when no longer in use
 type Cursor interface {
 	ReadCh() <-chan Entry
+	Reset() (uint64, error)
 	Close() error
 }
 
@@ -40,6 +43,9 @@ type cursor struct {
 	r      *bufio.Reader
 	readCh chan Entry
 
+	resetFlag   int32
+	resetRespCh chan uint64
+
 	closeCh chan struct{}
 	wg      util.WaitGroupWrapper
 
@@ -48,14 +54,15 @@ type cursor struct {
 
 func newCursor(w *wal, segmentNum uint64, idx uint64, offset uint64, logger logger) (Cursor, error) {
 	c := &cursor{
-		wal:        w,
-		offset:     offset,
-		startIdx:   idx,
-		idx:        idx,
-		segmentNum: segmentNum,
-		readCh:     make(chan Entry, 100), // TODO: (WAL) benchmark different buffer sizes
-		closeCh:    make(chan struct{}),
-		logger:     logger,
+		wal:         w,
+		offset:      offset,
+		startIdx:    idx,
+		idx:         idx,
+		segmentNum:  segmentNum,
+		readCh:      make(chan Entry, 100), // TODO: (WAL) benchmark different buffer sizes
+		resetRespCh: make(chan uint64),
+		closeCh:     make(chan struct{}),
+		logger:      logger,
 	}
 
 	c.wg.Wrap(c.readLoop)
@@ -72,6 +79,19 @@ func (c *cursor) logf(f string, args ...interface{}) {
 
 func (c *cursor) ReadCh() <-chan Entry {
 	return c.readCh
+}
+
+func (c *cursor) Reset() (uint64, error) {
+	atomic.StoreInt32(&c.resetFlag, 1)
+	for {
+		select {
+		case v := <-c.resetRespCh:
+			return v, nil
+		default:
+			time.Sleep(time.Millisecond)
+		}
+		c.wal.writeCond.Broadcast()
+	}
 }
 
 func (c *cursor) Close() error {
@@ -100,6 +120,14 @@ func (c *cursor) maybeWait() {
 	c.wal.writeCond.L.Lock()
 	for c.isAtTail() {
 		c.wal.writeCond.Wait()
+		if atomic.CompareAndSwapInt32(&c.resetFlag, 1, 0) {
+			c.segmentNum = c.wal.segmentNum
+			c.offset = c.wal.segment.offset
+			c.idx = c.wal.segment.idx
+			c.f.Close()
+			c.f = nil
+			c.resetRespCh <- c.idx
+		}
 	}
 	c.wal.writeCond.L.Unlock()
 }
