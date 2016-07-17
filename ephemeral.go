@@ -36,11 +36,17 @@ func (e *ephemeralWAL) Close() error {
 }
 
 func (e *ephemeralWAL) Delete() error {
-	return nil
+	return e.Empty()
 }
 
 func (e *ephemeralWAL) Empty() error {
-	return nil
+	for {
+		select {
+		case <-e.ch:
+		default:
+			return nil
+		}
+	}
 }
 
 type ephemeralCursor struct {
