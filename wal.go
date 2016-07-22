@@ -4,6 +4,7 @@ package wal
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,10 +17,25 @@ import (
 	"github.com/mreiferson/wal/internal/skiplist"
 )
 
+// EntryWriterTo is an interface representing an entry to be written
+// to the log
+type EntryWriterTo interface {
+	WriteTo(io.Writer) (int64, error)
+	CRC() uint32
+	Len() int64
+}
+
 // WriteAheadLogger is the primary interface
 type WriteAheadLogger interface {
-	// Append adds entries to the log, it expects a crc to be provided for each entry
-	Append(entries [][]byte, crc []uint32) (uint64, uint64, error)
+	// Append adds entries to the log
+	//
+	// It returns the start and end indices and any error
+	Append(entries []EntryWriterTo) (uint64, uint64, error)
+
+	// AppendBytes adds entries to the log, it expects a crc to be provided for each entry
+	//
+	// It returns the start and end indices and any error
+	AppendBytes(entries [][]byte, crc []uint32) (uint64, uint64, error)
 
 	// Close flushes and cleanly closes the log
 	Close() error
@@ -237,13 +253,55 @@ func (w *wal) openSegment(segmentNum uint64, idx uint64) (*segment, error) {
 		prefixedLogger(fmt.Sprintf("WAL(%s): ", w.name), w.logger))
 }
 
-// Append adds entries to the log, it expects a crc to be provided for each entry
-func (w *wal) Append(entries [][]byte, crc []uint32) (uint64, uint64, error) {
+// Append adds entries to the log
+//
+// It returns the start and end indices and any error
+func (w *wal) Append(entries []EntryWriterTo) (uint64, uint64, error) {
 	var err error
 
 	sizeWithHeader := int64(len(entries)) * 16
-	for _, d := range entries {
-		sizeWithHeader += int64(len(d))
+	for _, e := range entries {
+		sizeWithHeader += e.Len()
+	}
+
+	if sizeWithHeader >= w.segmentMaxBytes {
+		return 0, 0, fmt.Errorf("chunk too large %d > %d", sizeWithHeader, w.segmentMaxBytes)
+	}
+
+	w.Lock()
+	defer w.Unlock()
+
+	if w.exitFlag == 1 {
+		return 0, 0, errors.New("exiting")
+	}
+
+	segment, segmentNum, err := w.maybeRollSegment(sizeWithHeader)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	idx, err := segment.appendFast(entries)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	startIdx := w.idx
+	endIdx := idx - 1
+
+	w.broadcast(segment, segmentNum, idx)
+
+	return startIdx, endIdx, err
+}
+
+// AppendBytes adds entries to the log, it expects a crc to be provided for each entry
+//
+// It returns the start and end indices and any error
+func (w *wal) AppendBytes(entries [][]byte, crc []uint32) (uint64, uint64, error) {
+	var err error
+
+	sizeWithHeader := int64(len(entries)) * 16
+	for _, e := range entries {
+		sizeWithHeader += int64(len(e))
 	}
 
 	if sizeWithHeader >= w.segmentMaxBytes {
@@ -261,8 +319,30 @@ func (w *wal) Append(entries [][]byte, crc []uint32) (uint64, uint64, error) {
 		return 0, 0, errors.New("exiting")
 	}
 
+	segment, segmentNum, err := w.maybeRollSegment(sizeWithHeader)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	idx, err := segment.append(entries, crc)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	startIdx := w.idx
+	endIdx := idx - 1
+
+	w.broadcast(segment, segmentNum, idx)
+
+	return startIdx, endIdx, err
+}
+
+func (w *wal) maybeRollSegment(sizeWithHeader int64) (*segment, uint64, error) {
+	var err error
+
 	segment := w.segment
 	segmentNum := w.segmentNum
+
 	if segment != nil && segment.size()+sizeWithHeader >= w.segmentMaxBytes {
 		segmentNum++
 
@@ -278,18 +358,14 @@ func (w *wal) Append(entries [][]byte, crc []uint32) (uint64, uint64, error) {
 	if segment == nil {
 		segment, err = w.openSegment(segmentNum, w.idx)
 		if err != nil {
-			return 0, 0, err
+			return nil, 0, err
 		}
 	}
 
-	idx, err := segment.append(entries, crc)
-	if err != nil {
-		return 0, 0, err
-	}
+	return segment, segmentNum, nil
+}
 
-	startIdx := w.idx
-	endIdx := idx - 1
-
+func (w *wal) broadcast(segment *segment, segmentNum uint64, idx uint64) {
 	w.metadataLock.Lock()
 	if w.segmentNum != segmentNum {
 		w.segmentList.Set(w.segment.segmentMap.startIdx(), segmentListItem{
@@ -305,8 +381,6 @@ func (w *wal) Append(entries [][]byte, crc []uint32) (uint64, uint64, error) {
 	w.idx = idx
 	w.writeCond.Broadcast()
 	w.metadataLock.Unlock()
-
-	return startIdx, endIdx, err
 }
 
 func (w *wal) Close() error {

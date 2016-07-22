@@ -112,10 +112,53 @@ func (s *segment) writeTrailer() error {
 	return nil
 }
 
-func (s *segment) append(data [][]byte, crcs []uint32) (uint64, error) {
+func (s *segment) appendFastInner(idx uint64, entry EntryWriterTo) (uint32, error) {
+	var buf [16]byte
+
+	size := 4 /* CRC */ + 8 /* ID */ + uint32(entry.Len())
+
+	binary.BigEndian.PutUint32(buf[:4], size)
+	binary.BigEndian.PutUint32(buf[4:8], entry.CRC())
+	binary.BigEndian.PutUint64(buf[8:16], uint64(idx))
+
+	_, err := s.buf.Write(buf[:])
+	if err != nil {
+		return size, err
+	}
+
+	_, err = entry.WriteTo(&s.buf)
+	if err != nil {
+		return size, err
+	}
+
+	return size, nil
+}
+
+func (s *segment) appendInner(idx uint64, entry []byte, crc uint32) (uint32, error) {
+	var buf [16]byte
+
+	size := 4 /* CRC */ + 8 /* ID */ + uint32(len(entry))
+
+	binary.BigEndian.PutUint32(buf[:4], size)
+	binary.BigEndian.PutUint32(buf[4:8], crc)
+	binary.BigEndian.PutUint64(buf[8:16], uint64(idx))
+
+	_, err := s.buf.Write(buf[:])
+	if err != nil {
+		return 0, err
+	}
+
+	_, err = s.buf.Write(entry)
+	if err != nil {
+		return 0, err
+	}
+
+	return size, nil
+}
+
+func (s *segment) appendFast(entries []EntryWriterTo) (uint64, error) {
 	var err error
 	var totalBytes int
-	var buf [16]byte
 	var segmentMapItems [][2]uint64
 
 	s.buf.Reset()
@@ -123,19 +166,8 @@ func (s *segment) append(data [][]byte, crcs []uint32) (uint64, error) {
 	idx := s.idx
 	count := s.count
 	offset := s.offset
-	for i, entry := range data {
-		size := 4 /* CRC */ + 8 /* ID */ + uint32(len(entry))
-
-		binary.BigEndian.PutUint32(buf[:4], size)
-		binary.BigEndian.PutUint32(buf[4:8], crcs[i])
-		binary.BigEndian.PutUint64(buf[8:16], uint64(idx))
-
-		_, err = s.buf.Write(buf[:])
-		if err != nil {
-			goto exit
-		}
-
-		_, err = s.buf.Write(entry)
+	for _, entry := range entries {
+		size, err := s.appendFastInner(idx, entry)
 		if err != nil {
 			goto exit
 		}
@@ -150,6 +182,60 @@ func (s *segment) append(data [][]byte, crcs []uint32) (uint64, error) {
 	}
 
 	// TODO: (WAL) can we use writev here to avoid copying?
+	// https://github.com/golang/go/issues/13451
+	//
+	// only write to the file once
+	totalBytes, err = s.f.Write(s.buf.Bytes())
+	if err != nil {
+		goto exit
+	}
+
+	s.idx = idx
+	s.offset += uint64(totalBytes)
+	s.count += count
+
+	if len(segmentMapItems) > 0 {
+		for _, item := range segmentMapItems {
+			s.segmentMap.set(item[0], item[1])
+		}
+		err = s.segmentMap.flush(swapExtension(s.fileName, "map"))
+		if err != nil {
+			goto exit
+		}
+	}
+
+exit:
+	return s.idx, err
+}
+
+func (s *segment) append(entries [][]byte, crcs []uint32) (uint64, error) {
+	var err error
+	var totalBytes int
+	var segmentMapItems [][2]uint64
+
+	s.buf.Reset()
+
+	idx := s.idx
+	count := s.count
+	offset := s.offset
+	for i, entry := range entries {
+		size, err := s.appendInner(idx, entry, crcs[i])
+		if err != nil {
+			goto exit
+		}
+
+		if count%segmentMapFlushInterval == 0 {
+			segmentMapItems = append(segmentMapItems, [2]uint64{idx, offset})
+		}
+
+		idx++
+		count++
+		offset += 4 + uint64(size)
+	}
+
+	// TODO: (WAL) can we use writev here to avoid copying?
+	// https://github.com/golang/go/issues/13451
+	//
 	// only write to the file once
 	totalBytes, err = s.f.Write(s.buf.Bytes())
 	if err != nil {

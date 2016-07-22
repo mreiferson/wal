@@ -55,7 +55,7 @@ func crcAppend(w WriteAheadLogger, entries [][]byte) (uint64, uint64, error) {
 	for _, d := range entries {
 		crc = append(crc, crc32.ChecksumIEEE(d))
 	}
-	return w.Append(entries, crc)
+	return w.AppendBytes(entries, crc)
 }
 
 func TestWAL(t *testing.T) {

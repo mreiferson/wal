@@ -1,5 +1,9 @@
 package wal
 
+import (
+	"bytes"
+)
+
 type ephemeralWAL struct {
 	ch  chan Entry
 	idx uint64
@@ -12,7 +16,7 @@ func NewEphemeral() WriteAheadLogger {
 	}
 }
 
-func (e *ephemeralWAL) Append(entries [][]byte, crc []uint32) (uint64, uint64, error) {
+func (e *ephemeralWAL) AppendBytes(entries [][]byte, crc []uint32) (uint64, uint64, error) {
 	idxStart := e.idx
 	for _, entry := range entries {
 		e.ch <- Entry{
@@ -22,6 +26,16 @@ func (e *ephemeralWAL) Append(entries [][]byte, crc []uint32) (uint64, uint64, e
 		e.idx++
 	}
 	return idxStart, e.idx - 1, nil
+}
+
+func (e *ephemeralWAL) Append(entries []EntryWriterTo) (uint64, uint64, error) {
+	var entriesBytes [][]byte
+	for _, entry := range entries {
+		var b bytes.Buffer
+		entry.WriteTo(&b)
+		entriesBytes = append(entriesBytes, b.Bytes())
+	}
+	return e.AppendBytes(entriesBytes, nil)
 }
 
 func (e *ephemeralWAL) GetCursor(idx uint64) (Cursor, error) {
