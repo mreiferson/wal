@@ -47,6 +47,9 @@ type WriteAheadLogger interface {
 	// by fast forwarding read positions and removing intermediate files
 	Empty() error
 
+	// Index returns the last index of the current segment
+	Index() uint64
+
 	// GetCursor returns a Cursor at the specified index
 	GetCursor(idx uint64) (Cursor, error)
 }
@@ -202,6 +205,13 @@ func (w *wal) scanSegments() error {
 	w.idx = lastIdx + 1
 
 	return nil
+}
+
+// Index returns the last index of the current segment
+func (w *wal) Index() uint64 {
+	w.metadataLock.RLock()
+	defer w.metadataLock.RUnlock()
+	return w.idx
 }
 
 func (w *wal) GetCursor(idx uint64) (Cursor, error) {

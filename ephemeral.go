@@ -16,6 +16,10 @@ func NewEphemeral() WriteAheadLogger {
 	}
 }
 
+func (e *ephemeralWAL) Index() uint64 {
+	return e.idx
+}
+
 func (e *ephemeralWAL) AppendBytes(entries [][]byte, crc []uint32) (uint64, uint64, error) {
 	idxStart := e.idx
 	for _, entry := range entries {
