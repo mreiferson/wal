@@ -475,6 +475,9 @@ func (w *wal) deleteAll() error {
 
 // sync fsyncs the current segment
 func (w *wal) sync() error {
+	w.Lock()
+	defer w.Unlock()
+
 	if w.segment == nil {
 		return nil
 	}
