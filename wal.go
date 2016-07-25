@@ -55,11 +55,6 @@ type WriteAheadLogger interface {
 }
 
 type wal struct {
-	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	segmentNum   uint64
-	idx          uint64
-	retentionNum uint64
-
 	sync.RWMutex
 	metadataLock sync.RWMutex
 
@@ -69,8 +64,12 @@ type wal struct {
 	syncTimeout     time.Duration
 	version         int32
 
-	segment     *segment
-	segmentList *skiplist.SkipList
+	idx           uint64
+	segment       *segment
+	segmentList   *skiplist.SkipList
+	segmentNum    uint64
+	segmentOffset uint64
+	retentionNum  uint64
 
 	writeCond *sync.Cond
 	rollCond  *sync.Cond
@@ -120,6 +119,7 @@ func New(name string, dataPath string, segmentMaxBytes int64, syncTimeout time.D
 		return nil, err
 	}
 	w.segment = segment
+	w.segmentOffset = w.segment.offset
 
 	if w.syncTimeout > 0 {
 		go w.syncLoop()
@@ -290,7 +290,7 @@ func (w *wal) Append(entries []EntryWriterTo) (uint64, uint64, error) {
 		return 0, 0, err
 	}
 
-	idx, err := segment.appendFast(entries)
+	idx, err := segment.append(entries)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -334,7 +334,7 @@ func (w *wal) AppendBytes(entries [][]byte, crc []uint32) (uint64, uint64, error
 		return 0, 0, err
 	}
 
-	idx, err := segment.append(entries, crc)
+	idx, err := segment.appendBytes(entries, crc)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -387,6 +387,7 @@ func (w *wal) broadcast(segment *segment, segmentNum uint64, idx uint64) {
 	} else {
 		w.segment = segment
 	}
+	w.segmentOffset = w.segment.offset
 	w.segmentNum = segmentNum
 	w.idx = idx
 	w.writeCond.Broadcast()
@@ -431,8 +432,8 @@ func (w *wal) exit(deleted bool) error {
 // Empty destructively clears out any pending data in the log
 // by fast forwarding read positions and removing intermediate files
 func (w *wal) Empty() error {
-	w.RLock()
-	defer w.RUnlock()
+	w.Lock()
+	defer w.Unlock()
 
 	if w.exitFlag == 1 {
 		return errors.New("exiting")
@@ -464,8 +465,10 @@ func (w *wal) deleteAll() error {
 		}
 	}
 
+	w.metadataLock.Lock()
 	w.segmentNum++
 	w.retentionNum = w.segmentNum
+	w.metadataLock.Unlock()
 
 	return err
 }

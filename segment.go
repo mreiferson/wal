@@ -156,7 +156,7 @@ func (s *segment) appendInner(idx uint64, entry []byte, crc uint32) (uint32, err
 	return size, nil
 }
 
-func (s *segment) appendFast(entries []EntryWriterTo) (uint64, error) {
+func (s *segment) append(entries []EntryWriterTo) (uint64, error) {
 	var err error
 	var totalBytes int
 	var segmentMapItems [][2]uint64
@@ -208,7 +208,7 @@ exit:
 	return s.idx, err
 }
 
-func (s *segment) append(entries [][]byte, crcs []uint32) (uint64, error) {
+func (s *segment) appendBytes(entries [][]byte, crcs []uint32) (uint64, error) {
 	var err error
 	var totalBytes int
 	var segmentMapItems [][2]uint64

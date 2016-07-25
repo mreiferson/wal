@@ -113,7 +113,7 @@ func (c *cursor) openFile() error {
 }
 
 func (c *cursor) isAtTail() bool {
-	return c.segmentNum == c.wal.segmentNum && c.offset == c.wal.segment.offset
+	return c.segmentNum == c.wal.segmentNum && c.offset == c.wal.segmentOffset
 }
 
 func (c *cursor) maybeWait() {
